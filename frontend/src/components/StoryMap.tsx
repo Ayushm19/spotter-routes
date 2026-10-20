@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { AttributionControl, Map as MapInstance, Marker, ScaleControl, type ExpressionSpecification, type GeoJSONSource } from 'maplibre-gl';
+import { Map as MapInstance, Marker, ScaleControl, type ExpressionSpecification, type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '@/lib/maplibreWorker';
+import { MapCredit } from '@/components/MapCredit';
 import {
   HEX_KINDS, LIGHT_STYLE, along, hexImage, keyCheckpoint, scoredCheckpoints, stormFeatures, storyRoutes, tintLightMap,
   type LngLat, type RouteId, type SceneFrame,
@@ -51,7 +52,6 @@ export function StoryMap({ frame, initial, className, label }: {
       return;
     }
     map.addControl(new ScaleControl({ unit: 'imperial', maxWidth: 88 }), 'bottom-left');
-    map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 
     // The key-checkpoint card is DOM, so it gets real typography; MapLibre keeps it pinned.
     const card = document.createElement('div');
@@ -198,6 +198,7 @@ export function StoryMap({ frame, initial, className, label }: {
 
   return (
     <div ref={host} className={`story-map ${className ?? ''}`} role="img" aria-label={label}>
+      <MapCredit />
       {failed && <div className="story-map-fallback">Interactive map needs WebGL. The route story still reads below.</div>}
     </div>
   );

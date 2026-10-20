@@ -6,6 +6,7 @@ import { riskColor } from '@/lib/risk';
 import { usePlannerStore } from '@/lib/store';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '@/lib/maplibreWorker';
+import { MapCredit } from '@/components/MapCredit';
 
 interface RouteMapProps {
   routes: Route[];
@@ -88,7 +89,7 @@ export function RouteMap({ routes, selectedRoute, heatmap, layer, highlightedMil
         zoom: 5.2,
         minZoom: 3,
         maxZoom: 11,
-        attributionControl: { compact: true },
+        attributionControl: false, // credit is the quiet <MapCredit /> line instead
       });
       mapRef.current = map;
       map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
@@ -231,6 +232,7 @@ export function RouteMap({ routes, selectedRoute, heatmap, layer, highlightedMil
 
   return (
     <div className="map-container" ref={mapHost}>
+      <MapCredit />
       {fallback && <div className="static-map" aria-label="Static Dallas to Atlanta route map">
         <svg viewBox="0 0 1000 650" preserveAspectRatio="xMidYMid slice">
           <defs><pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="#cedbd8" strokeWidth="1" /></pattern></defs>

@@ -249,7 +249,7 @@ button { cursor: pointer; }
 }
 
 /* Map overlay layout: chips + forecast legend + zoom stack top-right, timeline at
-   the bottom, attribution bottom-right. Keeps the bottom edge free for the timeline alone. */
+   the bottom, map credit bottom-right. Keeps the bottom edge free for the timeline alone. */
 .maplibregl-ctrl-attrib{font:9px var(--font-mono)}
 .maplibregl-ctrl-group{border-radius:0!important;box-shadow:0 4px 18px rgba(14,30,37,.08)!important;border:1px solid var(--hairline)}
 /* Side-by-side layout (above the 680px bottom-sheet breakpoint). */
@@ -263,3 +263,8 @@ button { cursor: pointer; }
 
 .crash-screen{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:18px;text-align:center;padding:24px;color:var(--muted)}
 .crash-screen h1{font:700 40px var(--font-heading);letter-spacing:-.05em;color:var(--ink);margin:0}
+
+/* Required basemap credit, kept small and quiet. */
+.map-credit{position:absolute;right:8px;bottom:4px;z-index:1;margin:0;font:9px var(--font-mono);color:rgba(14,30,37,.45);pointer-events:auto}
+.map-credit a{color:inherit;text-decoration:none}
+.map-credit a:hover{color:var(--petrol);text-decoration:underline}

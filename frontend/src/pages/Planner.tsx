@@ -165,11 +165,23 @@ function CheckpointList({ checkpoints, highlightedMile, onHighlight, onActivate 
   const rowHeight = 62;
   const viewportHeight = 220;
   const [scrollTop, setScrollTop] = useState(0);
+  const scroller = useRef<HTMLDivElement>(null);
   const virtualized = checkpoints.length > 40;
+  // Keep the highlighted row in view as the timeline walks it along the route. Rows already
+  // visible (e.g. the one under the pointer) never move the list.
+  useEffect(() => {
+    const el = scroller.current;
+    const index = checkpoints.findIndex(cp => cp.mile === highlightedMile);
+    if (!el || index < 0) return;
+    const top = index * rowHeight;
+    if (top < el.scrollTop || top + rowHeight > el.scrollTop + el.clientHeight) {
+      el.scrollTo({ top: top - (el.clientHeight - rowHeight) / 2, behavior: 'smooth' });
+    }
+  }, [highlightedMile, checkpoints]);
   const start = virtualized ? Math.max(0, Math.floor(scrollTop / rowHeight) - 2) : 0;
   const end = virtualized ? Math.min(checkpoints.length, start + Math.ceil(viewportHeight / rowHeight) + 5) : checkpoints.length;
   return (
-    <div className="checkpoint-scroll" style={{ height: virtualized ? viewportHeight : 'auto', maxHeight: viewportHeight }} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
+    <div ref={scroller} className="checkpoint-scroll" style={{ height: virtualized ? viewportHeight : 'auto', maxHeight: viewportHeight }} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
       {virtualized && <div style={{ height: start * rowHeight }} aria-hidden="true" />}
       {checkpoints.slice(start, end).map(checkpoint => <CheckpointRow key={checkpoint.mile} checkpoint={checkpoint} highlighted={highlightedMile === checkpoint.mile} onHighlight={onHighlight} onActivate={onActivate} />)}
       {virtualized && <div style={{ height: Math.max(0, (checkpoints.length - end) * rowHeight) }} aria-hidden="true" />}
@@ -317,13 +329,11 @@ export default function Planner() {
   const setCheckpointHour = useCallback((mile: number) => {
     const checkpoint = selectedRoute?.checkpoints.find(item => item.mile === mile);
     if (checkpoint) {
-      setHighlightedMile(checkpoint.mile);
-      setHour(checkpoint.forecast_hour);
+      setHour(checkpoint.forecast_hour); // the timeline highlight then lands on this checkpoint
       setPlaying(false);
     }
   }, [selectedRoute, setHour, setPlaying]);
   const selectCheckpoint = useCallback((checkpoint: Checkpoint) => {
-    setHighlightedMile(checkpoint.mile);
     setHour(checkpoint.forecast_hour);
     setPlaying(false);
   }, [setHour, setPlaying]);
@@ -337,6 +347,14 @@ export default function Planner() {
     if (!upper || lowerHour === upperHour) return lower;
     return { hour, layer, points: blendFrames(lower.points, upper.points, hour - lowerHour) };
   }, [analysis, layer, hour, heatQuery.data, queryClient]);
+  // Where the truck is at the timeline's hour: the last checkpoint it has reached on the selected
+  // route. Playing or scrubbing walks this highlight along the road; hovering a dot overrides it.
+  const timelineMile = useMemo(() => {
+    const cps = selectedRoute?.checkpoints ?? [];
+    if (!cps.length || hour < cps[0].forecast_hour || hour > cps[cps.length - 1].forecast_hour) return null;
+    return cps.reduce((reached, cp) => (cp.forecast_hour <= hour ? cp : reached), cps[0]).mile;
+  }, [selectedRoute, hour]);
+  const activeMile = highlightedMile ?? timelineMile;
   const recommendedRoute = analysis?.routes.find(route => route.id === analysis.recommended_route_id) ?? null;
   const forecastTime = addHours(new Date(), hour);
   const hourLabel = `${format(forecastTime, 'EEE HH:mm')} · +${Math.round(hour)}H`;
@@ -347,7 +365,7 @@ export default function Planner() {
       <InstrumentBar />
       <div className="planner-shell">
         <motion.section className="map-stage" layoutId="route-map-transition" aria-label="Route map and weather timeline">
-          <RouteMap routes={analysis?.routes ?? []} selectedRoute={selectedRoute} heatmap={heatmap} layer={layer} highlightedMile={highlightedMile} onCheckpoint={setCheckpointHour} onCheckpointHover={setHighlightedMile} />
+          <RouteMap routes={analysis?.routes ?? []} selectedRoute={selectedRoute} heatmap={heatmap} layer={layer} highlightedMile={activeMile} onCheckpoint={setCheckpointHour} onCheckpointHover={setHighlightedMile} />
           <div className="map-overlay map-legend">
             <h3>Weather exposure</h3>
             {(['low', 'moderate', 'high', 'severe', 'no_travel'] as RiskLevel[]).map(level => <div key={level} className="legend-entry"><i className={level === 'no_travel' ? 'hatch' : ''} style={{ '--risk-color': riskColor(level), background: level === 'no_travel' ? undefined : riskColor(level) } as CSSProperties} /><span>{levelNames[level]}</span></div>)}
@@ -451,7 +469,7 @@ export default function Planner() {
               selected={route.id === selectedRouteId}
               recommended={route.id === analysis.recommended_route_id}
               onClick={() => setSelectedRouteId(route.id)}
-              highlightedMile={highlightedMile}
+              highlightedMile={activeMile}
               onHighlight={setHighlightedMile}
               onCheckpoint={selectCheckpoint}
             />)}
