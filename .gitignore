@@ -1,0 +1,19 @@
+# Dependencies and builds
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local secrets and env
+.env
+.env.local
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
