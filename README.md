@@ -3,7 +3,7 @@
 A React + Django app that helps a truck driver pick the safest of three routes based on **weather, load weight and travel time**. Built for the Spotter full-stack assessment.
 
 - **Frontend:** `frontend/`. Vite, React 19, TypeScript, MapLibre GL, TanStack Query, Framer Motion.
-- **Backend:** `backend/`. Django, plain JSON views, no database (analyses are cached in memory for an hour).
+- **Backend:** `backend/`. Django, plain JSON views, no database and no server state (serverless-friendly).
 
 ## What it does
 
@@ -66,4 +66,4 @@ The frontend has a full mock of the API (Dallas → Atlanta with a scripted stor
 - Open-Meteo's free tier is for non-commercial use; production would use its paid endpoint (same API).
 - `vehicleWeight` assumes a 33,000 lb empty tractor-trailer plus the entered load.
 - Sustained wind (not gusts) is compared against the spec's wind bands.
-- Analyses live in process memory, so run a single worker (or add Redis) in production.
+- The API keeps no state between requests: the analysis id encodes what the heatmap needs, and forecasts are only cached per instance. It deploys as serverless functions (both apps are on Vercel; see `vercel.json` in each folder).

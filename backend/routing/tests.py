@@ -92,6 +92,20 @@ class NwsParsingTests(SimpleTestCase):
         self.assertEqual(clients._hourly(layer, start, 5, per_hour=True), [5, 2, 2, 2, 0])
 
 
+class AnalysisIdTests(SimpleTestCase):
+    def test_round_trip(self):
+        from . import analysis
+        cells = [(131, -387), (132, -386), (-200, 700)]
+        token = analysis.encode_analysis_id(1_760_000_400, 42_000, cells)
+        self.assertRegex(token, r"^[A-Za-z0-9_-]+$")  # safe in a URL path
+        self.assertEqual(analysis.decode_analysis_id(token), (1_760_000_400, 42_000, cells))
+
+    def test_garbage_ids_are_rejected(self):
+        from . import analysis
+        for bad in ["", "abc", "!!!!", "eJwLycgsVgCi4pLM5BSFRJCTgD8xuX4", "x" * 500]:
+            self.assertIsNone(analysis.decode_analysis_id(bad))
+
+
 class WeatherSourceTests(SimpleTestCase):
     START = 1_760_000_400  # 2025-10-09T09:00:00Z
 

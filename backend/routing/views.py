@@ -118,5 +118,6 @@ def heatmap(request, analysis_id):
     if frame is None:
         return _error(404, "analysis_expired", "This analysis has expired. Run it again.")
     response = JsonResponse(frame)
-    response["Cache-Control"] = "public, max-age=600"  # frames for an analysis never change
+    # Same id + hour + layer gives the same frame until forecasts refresh, so let CDNs cache it.
+    response["Cache-Control"] = "public, max-age=600, s-maxage=1800"
     return response

@@ -13,7 +13,7 @@ python -m venv .venv
 
 Env vars: `TOMTOM_API_KEY` and optionally `TOMTOM_API_KEY_FALLBACK` (free keys from developer.tomtom.com; copy `.env.example` to `backend/.env`, which git ignores; the fallback takes over on 401/403/429). Without it the app falls back to keyless OSRM + Photon. Optional: `DJANGO_SECRET_KEY`, `DJANGO_DEBUG` (`0` in production), `DJANGO_ALLOWED_HOSTS` (comma list), `CORS_ALLOWED_ORIGINS` (comma list; all origins allowed when empty).
 
-Deploy (Render/Railway/Heroku style): build `pip install -r requirements.txt`, start from `Procfile`. Keep **one** worker: analyses are cached in process memory.
+Deploy: on Vercel, import the repo with **Root Directory** `backend` (`vercel.json` and `api/index.py` serve Django as a Python function) and set the TomTom key env vars. Any WSGI host works too (`config.wsgi:application`).
 
 ## API
 
@@ -34,7 +34,7 @@ Errors are always `{"error": {"code", "message"}}` with 400 (bad input), 404 (ex
 4. **Weather**: Open-Meteo hourly forecast, worldwide, requested in batches of 50 points (free, no key). If a batch fails, each point falls back to the NWS gridded forecast (inside the US) or MET Norway (anywhere). Points in the same 0.25° cell share one lookup and are cached for 30 minutes. The value at each checkpoint is interpolated to the hour of its ETA.
 5. **Risk** (`routing/risk.py`): the worst of the wind, rain and snow levels, after the load rules. The stretch between two checkpoints takes the worse of their levels, which gives miles per level. Score = level × 25.
 6. **Recommendation**: routes with any no-travel checkpoint are excluded. The rest are ranked by severe miles, then high miles, then average score, then duration.
-7. **Heatmap**: at analyze time, the intensity of every weather cell along the 3 routes is computed for hours 0–48 for each layer and cached for 1 hour. The heatmap endpoint just slices that cache, so scrubbing is cheap.
+7. **Heatmap**: the `analysis_id` is a compressed, URL-safe encoding of the trip's weather cells, load and base hour. The heatmap endpoint decodes it and computes one frame from the (cached) forecasts, so no server memory is shared between requests. Responses carry `s-maxage` so a CDN can serve repeat frames. Ids older than 3 hours read as expired.
 
 ## Trade-offs
 

@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -14,8 +15,10 @@ if _env_file.exists():
 # Tried in order; a key that is rejected or out of quota hands over to the next one.
 TOMTOM_API_KEYS = [k for k in (os.environ.get("TOMTOM_API_KEY"), os.environ.get("TOMTOM_API_KEY_FALLBACK")) if k]
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-insecure-key")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+# The API signs nothing (no sessions, cookies or CSRF), so a per-process random key is fine when unset.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or secrets.token_urlsafe(50)
+# Debug only for local runs; Vercel sets VERCEL=1.
+DEBUG = os.environ.get("DJANGO_DEBUG", "0" if os.environ.get("VERCEL") else "1") == "1"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
 INSTALLED_APPS = [

@@ -1,10 +1,10 @@
 """Route analysis: 3 routes -> checkpoints at the truck's ETA -> weather -> risk -> recommendation."""
 
+import base64
 import math
-import uuid
+import struct
+import zlib
 from datetime import datetime, timedelta, timezone
-
-from django.core.cache import cache
 
 from . import clients, geo, risk
 
@@ -15,7 +15,9 @@ HEATMAP_HOURS = 48
 # ponytail: points in the same 0.25° cell (~17 mi, about a global weather model grid cell) share
 # one forecast lookup, so a long trip stays near 100 Open-Meteo locations of its 10k/day free quota.
 WEATHER_GRID_DEG = 0.25
-CACHE_SECONDS = 60 * 60
+ANALYSIS_TTL_SECONDS = 3 * 60 * 60  # heatmaps for older analyses read as expired
+ID_VERSION = 1
+MAX_ID_BYTES = 9 + 4 * 2000  # header + up to 2000 cells
 LAYERS = ("risk", "wind", "rain", "snow")
 
 
@@ -172,22 +174,10 @@ def analyze(origin, destination, departure, load_lbs, interval_mi):
 
     best, reason = risk.recommend(routes)
 
-    # 4. Heatmap frames for hours 0..48 from now, cached for the heatmap endpoint.
+    # 4. The heatmap endpoint recomputes frames on demand from this id, so no server state is
+    #    needed between requests (serverless instances don't share memory).
     hour0 = now.replace(minute=0, second=0, microsecond=0).timestamp()
-    frames = {layer: [] for layer in LAYERS}
-    for h in range(HEATMAP_HOURS + 1):
-        at = {layer: [] for layer in LAYERS}
-        for lat, lng in grid:
-            wind, rain, snow = _weather_at(series[_grid_key(lat, lng)], hour0 + h * 3600)
-            for layer in LAYERS:
-                value = _intensity(layer, wind, rain, snow, load_lbs)
-                if value > 0.02:  # zero-weight points draw nothing; skip them to keep frames small
-                    at[layer].append({"lat": lat, "lng": lng, "intensity": round(value, 3)})
-        for layer in LAYERS:
-            frames[layer].append(at[layer])
-
-    analysis_id = uuid.uuid4().hex[:12]
-    cache.set(f"heatmap:{analysis_id}", frames, CACHE_SECONDS)
+    analysis_id = encode_analysis_id(hour0, load_lbs, keys)
 
     return {
         "analysis_id": analysis_id,
@@ -198,8 +188,38 @@ def analyze(origin, destination, departure, load_lbs, interval_mi):
     }
 
 
-def heatmap(analysis_id, hour, layer):
-    frames = cache.get(f"heatmap:{analysis_id}")
-    if frames is None:
+def encode_analysis_id(hour0, load_lbs, cells):
+    """Pack what the heatmap needs (base hour, load, weather cells) into a URL-safe token."""
+    raw = struct.pack(f">BII{2 * len(cells)}h", ID_VERSION, int(hour0), int(load_lbs), *(v for cell in cells for v in cell))
+    return base64.urlsafe_b64encode(zlib.compress(raw, 9)).rstrip(b"=").decode()
+
+
+def decode_analysis_id(analysis_id):
+    """Inverse of encode_analysis_id; None for anything malformed (the id comes from clients)."""
+    try:
+        data = base64.urlsafe_b64decode(analysis_id + "=" * (-len(analysis_id) % 4))
+        raw = zlib.decompressobj().decompress(data, MAX_ID_BYTES)  # bounded: no zip bombs
+        version, hour0, load_lbs = struct.unpack(">BII", raw[:9])
+        values = struct.unpack(f">{(len(raw) - 9) // 2}h", raw[9:])
+    except (ValueError, struct.error, zlib.error):
         return None
-    return {"hour": hour, "layer": layer, "points": frames[layer][hour]}
+    if version != ID_VERSION or not values or len(values) % 2:
+        return None
+    return hour0, load_lbs, list(zip(values[::2], values[1::2]))
+
+
+def heatmap(analysis_id, hour, layer):
+    decoded = decode_analysis_id(analysis_id)
+    if decoded is None:
+        return None
+    hour0, load_lbs, cells = decoded
+    if hour0 < datetime.now(timezone.utc).timestamp() - ANALYSIS_TTL_SECONDS:
+        return None
+    grid = [(round(lat * WEATHER_GRID_DEG, 3), round(lng * WEATHER_GRID_DEG, 3)) for lat, lng in cells]
+    points = []
+    for (lat, lng), series in zip(grid, clients.forecast(grid)):
+        wind, rain, snow = _weather_at(series, hour0 + hour * 3600)
+        value = _intensity(layer, wind, rain, snow, load_lbs)
+        if value > 0.02:  # zero-weight points draw nothing; skip them to keep frames small
+            points.append({"lat": lat, "lng": lng, "intensity": round(value, 3)})
+    return {"hour": hour, "layer": layer, "points": points}
