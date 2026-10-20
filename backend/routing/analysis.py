@@ -12,15 +12,19 @@ ROUTE_COUNT = 3
 TRUCK_MAX_MPH = 65  # guards the OSRM fallback, whose car profile is faster than a loaded truck
 DETOUR_OFFSETS = (0.15, -0.15, 0.3, -0.3)  # fraction of the straight-line distance
 HEATMAP_HOURS = 48
-# ponytail: points in the same 0.25° cell (~17 mi) share one forecast lookup to keep a long
-# trip to ~100 NWS calls; shrink this for finer weather at the cost of a slower first analysis.
+# ponytail: points in the same 0.25° cell (~17 mi, about a global weather model grid cell) share
+# one forecast lookup, so a long trip stays near 100 Open-Meteo locations of its 10k/day free quota.
 WEATHER_GRID_DEG = 0.25
 CACHE_SECONDS = 60 * 60
 LAYERS = ("risk", "wind", "rain", "snow")
 
 
 def _find_routes(origin, destination, load_lbs, departure):
-    """Router alternatives, topped up to 3 with detours via points off the straight line."""
+    """Router alternatives, topped up to 3 with detours via points off the straight line.
+
+    Where the road network has fewer distinct options (one highway through a region), fewer
+    than 3 routes come back; that is the honest answer.
+    """
     opts = {"load_lbs": load_lbs, "depart_at": departure}
     found = clients.route([origin, destination], alternatives=True, **opts)[:ROUTE_COUNT]
     if len(found) < ROUTE_COUNT:
@@ -29,7 +33,10 @@ def _find_routes(origin, destination, load_lbs, departure):
         dx, dy = (destination[0] - origin[0]) * kx, destination[1] - origin[1]
         for offset in DETOUR_OFFSETS:
             via = (mid_lng - dy * offset / kx, mid_lat + dx * offset)
-            candidate = clients.route([origin, via, destination], **opts)[0]
+            try:
+                candidate = clients.route([origin, via, destination], **opts)[0]
+            except clients.UpstreamError:
+                continue  # via point off any road (e.g. Alaskan wilderness): try the next detour
             length = candidate["seconds"][-1]
             # ponytail: distinct = >2% different travel time; a geometry-overlap check would be stricter
             if all(abs(length - r["seconds"][-1]) / r["seconds"][-1] > 0.02 for r in found):

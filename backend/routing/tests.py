@@ -69,6 +69,11 @@ class RecommendationTests(SimpleTestCase):
         best, _ = risk.recommend([_route("A", [LOW, LOW], 500), _route("B", [LOW, LOW], 400)])
         self.assertEqual(best["label"], "B")
 
+    def test_single_route_says_so(self):
+        best, reason = risk.recommend([_route("A", [LOW, HIGH], 300)])
+        self.assertEqual(best["label"], "A")
+        self.assertIn("only truck route", reason)
+
     def test_blocked_routes_never_recommended(self):
         best, _ = risk.recommend([_route("A", [LOW, NO_TRAVEL], 100), _route("B", [LOW, SEVERE], 900)])
         self.assertEqual(best["label"], "B")
@@ -85,6 +90,33 @@ class NwsParsingTests(SimpleTestCase):
         ]}
         self.assertEqual(clients._hourly(layer, start, 5), [10, 6, 6, 6, 0])
         self.assertEqual(clients._hourly(layer, start, 5, per_hour=True), [5, 2, 2, 2, 0])
+
+
+class WeatherSourceTests(SimpleTestCase):
+    START = 1_760_000_400  # 2025-10-09T09:00:00Z
+
+    def test_met_norway_hourly_then_six_hourly_and_snow_when_frozen(self):
+        fake = {"properties": {"timeseries": [
+            {"time": "2025-10-09T09:00:00Z", "data": {"instant": {"details": {"wind_speed": 10, "air_temperature": 5}},
+                                                      "next_1_hours": {"details": {"precipitation_amount": 2.54}}}},
+            {"time": "2025-10-09T10:00:00Z", "data": {"instant": {"details": {"wind_speed": 0, "air_temperature": -2}},
+                                                      "next_6_hours": {"details": {"precipitation_amount": 6 * 2.54}}}},
+        ]}}
+        with patch.object(clients, "_get", return_value=fake):
+            s = clients._met_series(60.0, 10.0, self.START, 8)
+        self.assertAlmostEqual(s["wind"][0], 22.37, places=2)  # 10 m/s in mph
+        self.assertAlmostEqual(s["rain"][0], 0.1)  # 2.54 mm in one hour
+        self.assertEqual(s["rain"][1:7], [0.0] * 6)  # frozen hours are snow, not rain
+        self.assertAlmostEqual(s["snow"][3], 1.0)  # 2.54 mm/h liquid at 10:1
+        self.assertEqual(s["snow"][7], 0.0)  # beyond the 6-hour block
+
+    def test_open_meteo_failure_falls_back_per_point(self):
+        series = {"start": self.START, "wind": [1.0], "rain": [0.0], "snow": [0.0]}
+        with patch.object(clients, "_open_meteo_chunk", side_effect=clients.UpstreamError("weather_unavailable", "down", 503)), \
+             patch.object(clients, "_single_point", return_value=series) as single:
+            out = clients.forecast([(48.8, 2.3), (52.5, 13.4)], hours=1)
+        self.assertEqual(out, [series, series])
+        self.assertEqual(single.call_count, 2)
 
 
 @override_settings(TOMTOM_API_KEYS=["test-key"])

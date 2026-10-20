@@ -1,8 +1,9 @@
 """Thin wrappers around the third-party APIs.
 
-Routing and geocoding use TomTom (truck profile, traffic and departure aware) when a
-TomTom key is configured (a fallback key takes over if the first is rejected or out of quota), and fall back to the keyless OSRM demo server and Photon otherwise
-or when TomTom refuses a request. Weather is always the US National Weather Service.
+Routing and geocoding use TomTom (truck profile, traffic and departure aware) when a TomTom
+key is configured (a fallback key takes over if the first is rejected or out of quota), and fall
+back to the keyless OSRM demo server and Photon otherwise. Weather comes from Open-Meteo
+worldwide, with NWS (US) and MET Norway (elsewhere) as per-point fallbacks.
 """
 
 import re
@@ -21,7 +22,9 @@ TOMTOM_ROUTE_URL = "https://api.tomtom.com/routing/1/calculateRoute/{path}/json"
 TOMTOM_SEARCH_URL = "https://api.tomtom.com/search/2/search/{query}.json"
 PHOTON_URL = "https://photon.komoot.io/api/"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving/"
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 NWS_URL = "https://api.weather.gov"
+MET_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 
 LB_PER_KG = 2.20462
 # TomTom's vehicleWeight is the whole vehicle. ponytail: assume a typical empty tractor-trailer
@@ -29,7 +32,8 @@ LB_PER_KG = 2.20462
 TRUCK_TARE_LBS = 33_000
 
 _http = requests.Session()
-_http.headers["User-Agent"] = "spotter-routes-assessment/1.0"
+# MET Norway and NWS ask callers to identify themselves.
+_http.headers["User-Agent"] = "spotter-routes/1.0 github.com/Ayushm19/spotter-routes"
 
 
 class UpstreamError(Exception):
@@ -89,7 +93,7 @@ def providers():
     return {
         "routing": "TomTom Routing (truck)" if keyed else "OSRM demo (car)",
         "geocoding": "TomTom Search" if keyed else "Photon",
-        "weather": "NWS gridded forecast",
+        "weather": "Open-Meteo (NWS / MET Norway fallback)",
     }
 
 
@@ -98,17 +102,40 @@ def providers():
 def _tomtom_geocode(query, limit):
     data = _tomtom_get(TOMTOM_SEARCH_URL.format(query=quote(query, safe="")), {
         "typeahead": "true", "limit": limit,
-        "countrySet": "US,CA,MX", "idxSet": "Geo,PAD,Addr", "lat": 39.5, "lon": -98.35,
+        "idxSet": "Geo,PAD,Addr",
     }, "geocoder_unavailable", attempts=2)
-    return [
-        {"label": r["address"]["freeformAddress"], "lat": r["position"]["lat"], "lng": r["position"]["lon"]}
-        for r in data.get("results", []) if r.get("address", {}).get("freeformAddress")
-    ]
+    places = []
+    for r in data.get("results", []):
+        address = r.get("address", {})
+        label = address.get("freeformAddress")
+        if not label:
+            continue
+        # US labels already read "Paris, TX"; elsewhere add the country so "Paris" is unambiguous.
+        country = address.get("country")
+        if address.get("countryCode") != "US" and country and country not in label:
+            label = f"{label}, {country}"
+        lat, lng = r["position"]["lat"], r["position"]["lon"]
+        box = r.get("boundingBox")
+        if box and box["topLeftPoint"]["lat"] - box["btmRightPoint"]["lat"] > 1.0:
+            lat, lng = _town_centre(label, box) or (lat, lng)
+        places.append({"label": label, "lat": lat, "lng": lng})
+    return places
+
+
+def _town_centre(label, box):
+    """TomTom gives some sparse areas (e.g. Tok or Haines, Alaska) the centroid of a census area
+    hundreds of miles wide, far from any road. Ask OpenStreetMap for the town itself inside that box."""
+    try:
+        for lat, lng in ((p["lat"], p["lng"]) for p in _photon_geocode(label, 3)):
+            if box["btmRightPoint"]["lat"] <= lat <= box["topLeftPoint"]["lat"] and box["topLeftPoint"]["lon"] <= lng <= box["btmRightPoint"]["lon"]:
+                return lat, lng
+    except UpstreamError:
+        pass
+    return None
 
 
 def _photon_geocode(query, limit):
-    # Biased toward the continental US, where the routing and weather data are best.
-    data = _get(PHOTON_URL, {"q": query, "limit": limit, "lang": "en", "lat": 39.5, "lon": -98.35}, "geocoder_unavailable")
+    data = _get(PHOTON_URL, {"q": query, "limit": limit, "lang": "en"}, "geocoder_unavailable")
     places = []
     for f in data.get("features", []):
         p = f["properties"]
@@ -120,7 +147,7 @@ def _photon_geocode(query, limit):
 
 def geocode(query, limit=6):
     """Places matching a partial query. Cached for a day: autocomplete repeats prefixes a lot."""
-    key = f"geo:{query.lower()}"
+    key = f"geo:{quote(query.lower(), safe='')}"  # encoded: cache backends reject spaces
     cached = cache.get(key)
     if cached is not None:
         return cached
@@ -215,6 +242,29 @@ def route(waypoints, alternatives=False, load_lbs=0, depart_at=None):
 
 
 # ---- Weather ----
+# Every source returns {"start": epoch of the first hour, "wind": mph, "rain": in/hr, "snow": in/hr}
+# as hourly lists, so analysis code does not care where a forecast came from.
+
+OPEN_METEO_CHUNK = 50  # locations per request; keeps URLs short and lets chunks run in parallel
+
+
+def _open_meteo_chunk(points, hours):
+    data = _get(OPEN_METEO_URL, {
+        "latitude": ",".join(f"{lat:.3f}" for lat, _ in points),
+        "longitude": ",".join(f"{lng:.3f}" for _, lng in points),
+        "hourly": "wind_speed_10m,rain,snowfall",
+        "wind_speed_unit": "mph", "precipitation_unit": "inch",
+        "timeformat": "unixtime", "timezone": "UTC", "forecast_hours": hours,
+    }, "weather_unavailable", attempts=2)
+    locations = data if isinstance(data, list) else [data]
+    if len(locations) != len(points):
+        raise UpstreamError("weather_unavailable", "Weather unavailable: incomplete response")
+    return [
+        {"start": loc["hourly"]["time"][0], "wind": loc["hourly"]["wind_speed_10m"],
+         "rain": loc["hourly"]["rain"], "snow": loc["hourly"]["snowfall"]}
+        for loc in locations
+    ]
+
 
 _DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?")
 
@@ -242,10 +292,10 @@ def _nws_series(lat, lng, start, hours):
     point_key = f"nws-point:{lat:.3f},{lng:.3f}"
     grid_url = cache.get(point_key)
     if grid_url is None:
-        point = _get(f"{NWS_URL}/points/{lat:.4f},{lng:.4f}", {}, "weather_unavailable")
+        point = _get(f"{NWS_URL}/points/{lat:.4f},{lng:.4f}", {}, "weather_unavailable", attempts=2)
         grid_url = point["properties"]["forecastGridData"]
         cache.set(point_key, grid_url, 24 * 3600)  # point -> grid cell mapping is static
-    p = _get(grid_url, {}, "weather_unavailable", attempts=4)["properties"]
+    p = _get(grid_url, {}, "weather_unavailable", attempts=3)["properties"]
 
     snow = [mm / 25.4 for mm in _hourly(p["snowfallAmount"], start, hours, per_hour=True)]
     precip = [mm / 25.4 for mm in _hourly(p["quantitativePrecipitation"], start, hours, per_hour=True)]
@@ -258,28 +308,62 @@ def _nws_series(lat, lng, start, hours):
     }
 
 
-def forecast(points, hours=96):
-    """Hourly wind (mph), rain and snow (in/hr) for (lat, lng) points, in input order.
+def _met_series(lat, lng, start, hours):
+    """MET Norway Locationforecast (global, keyless). Hourly for ~2.5 days, then 6-hour steps."""
+    data = _get(MET_URL, {"lat": f"{lat:.3f}", "lon": f"{lng:.3f}"}, "weather_unavailable", attempts=2)
+    wind, rain, snow = [0.0] * hours, [0.0] * hours, [0.0] * hours
+    for step in data["properties"]["timeseries"]:
+        h = int((datetime.fromisoformat(step["time"].replace("Z", "+00:00")).timestamp() - start) // 3600)
+        block = step["data"].get("next_1_hours") or step["data"].get("next_6_hours")
+        if block is None or h >= hours:
+            continue
+        length = 1 if "next_1_hours" in step["data"] else 6
+        instant = step["data"]["instant"]["details"]
+        mm_per_hour = block["details"].get("precipitation_amount", 0.0) / length
+        # ponytail: MET gives liquid precip only; at or below freezing count it as snow at ~10:1.
+        frozen = instant.get("air_temperature", 5.0) <= 0.5
+        for k in range(max(h, 0), min(h + length, hours)):
+            wind[k] = instant.get("wind_speed", 0.0) * 2.23694
+            rain[k] = 0.0 if frozen else mm_per_hour / 25.4
+            snow[k] = mm_per_hour * 10 / 25.4 if frozen else 0.0
+    return {"start": start, "wind": wind, "rain": rain, "snow": snow}
 
-    Source is the US National Weather Service gridded forecast (free, no key, US only).
-    Each series is cached for 30 min, so callers should snap points to a grid.
+
+def _single_point(lat, lng, start, hours):
+    """Fallback for one point: NWS where it has coverage (the US), MET Norway everywhere else."""
+    # Rough box around the US incl. Alaska and Hawaii; NWS answers 404 for border points it misses.
+    if 18 <= lat <= 72 and -180 <= lng <= -64:
+        try:
+            return _nws_series(lat, lng, start, hours)
+        except UpstreamError:
+            pass
+    return _met_series(lat, lng, start, hours)
+
+
+def forecast(points, hours=96):
+    """Hourly wind (mph), rain and snow (in/hr) for (lat, lng) points anywhere, in input order.
+
+    Open-Meteo answers in a few batched requests. Chunks it fails on fall back point by point
+    to NWS (US) or MET Norway (elsewhere). Each series is cached for 30 min, so callers should
+    snap points to a grid.
     """
     start = int(time.time() // 3600 * 3600)
     keys = [f"wx:{lat:.3f},{lng:.3f}" for lat, lng in points]
     found = cache.get_many(keys)
     missing = [(k, p) for k, p in zip(keys, points) if k not in found]
+    chunks = [missing[i:i + OPEN_METEO_CHUNK] for i in range(0, len(missing), OPEN_METEO_CHUNK)]
 
-    def fetch(item):
-        key, (lat, lng) = item
+    def fetch_chunk(chunk):
         try:
-            return key, _nws_series(lat, lng, start, hours)
-        except UpstreamError as exc:
-            if exc.status == 404:
-                raise UpstreamError("outside_coverage", "Weather data covers the United States only.") from exc
-            raise
+            return dict(zip([k for k, _ in chunk], _open_meteo_chunk([p for _, p in chunk], hours)))
+        except UpstreamError:
+            with ThreadPoolExecutor(max_workers=16) as pool:  # MET Norway allows 20 requests/s per app
+                return dict(pool.map(lambda item: (item[0], _single_point(*item[1], start, hours)), chunk))
 
-    with ThreadPoolExecutor(max_workers=24) as pool:  # NWS is latency-bound; 24 measured ~25% faster than 12
-        fresh = dict(pool.map(fetch, missing))
+    fresh = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for part in pool.map(fetch_chunk, chunks):
+            fresh.update(part)
     cache.set_many(fresh, 30 * 60)
     found.update(fresh)
     return [found[k] for k in keys]

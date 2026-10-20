@@ -67,7 +67,7 @@ export interface AnalyzeRequest {
 
 export interface AnalyzeResponse {
   analysis_id: string;
-  routes: [Route, Route, Route];
+  routes: Route[]; // usually 3; fewer where the road network has no distinct alternatives
   recommended_route_id: string | null;
   recommendation_reason: string;
 }

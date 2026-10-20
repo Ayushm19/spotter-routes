@@ -29,8 +29,8 @@ def allow(method):
     return decorate
 
 
-# The trip itself can't be served (no road, no coverage): the client's input, not an outage.
-UNSERVABLE = {"no_route", "outside_coverage"}
+# The trip itself can't be served (no road between the places): the client's input, not an outage.
+UNSERVABLE = {"no_route"}
 
 
 def _upstream_error(exc):

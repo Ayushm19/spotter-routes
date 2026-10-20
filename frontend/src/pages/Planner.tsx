@@ -411,7 +411,7 @@ export default function Planner() {
             <Link to="/" className="back-link"><ArrowLeft size={14} /> Spotter Routes</Link>
             <div className="eyebrow" style={{ color: 'var(--muted)', marginTop: 11 }}>DISPATCH / ROUTE ANALYSIS</div>
             <h1>Plan a truck <span className="serif-italic">route</span></h1>
-            <p>Compare conditions along three corridor options.</p>
+            <p>Compare conditions along up to three corridor options.</p>
           </div>
           <div className="form-block">
             <LocationField label="Origin" value={origin.label} onChange={value => setOrigin({ ...origin, label: value, lat: Number.NaN, lng: Number.NaN })} onSelect={setOrigin} selected={Number.isFinite(origin.lat) && Number.isFinite(origin.lng)} />
@@ -435,7 +435,7 @@ export default function Planner() {
             {mutation.isError && <div className="inline-error" role="alert"><span>{mutation.error instanceof ApiRequestError ? `${mutation.error.code} · ${mutation.error.message}` : mutation.error.message || 'Route analysis could not load.'}</span><button type="button" onClick={runAnalysis}><RefreshCw size={12} /> Retry</button></div>}
           </div>
           <div className="route-results" aria-live="polite">
-            <div className="results-header"><h2>Route options</h2><span>{analysis ? '3 CORRIDORS' : 'READY WHEN YOU ARE'}</span></div>
+            <div className="results-header"><h2>Route options</h2><span>{analysis ? `${analysis.routes.length} CORRIDOR${analysis.routes.length === 1 ? '' : 'S'}` : 'READY WHEN YOU ARE'}</span></div>
             {mutation.isPending && <div className="route-skeleton"><i /><i /><i /></div>}
             {!analysis && !mutation.isPending && <div className="empty-results">Set the trip details, then analyze to compare weather exposure on three truck-friendly routes.</div>}
             {recommendedRoute && <div className="recommended-summary">

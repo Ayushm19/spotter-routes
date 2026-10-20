@@ -83,6 +83,8 @@ def recommend(routes):
     if not candidates:
         return None, "Every route hits a no-travel checkpoint. Delay departure or reduce load."
     best = candidates[0]
+    if len(routes) == 1:
+        return best, f"{best['label']} is the only truck route between these places."
     if len(candidates) == 1:
         return best, f"{best['label']} is the only route without a no-travel checkpoint."
 
