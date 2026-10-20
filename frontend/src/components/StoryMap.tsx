@@ -63,6 +63,7 @@ export function StoryMap({ frame, initial, className, label }: {
 
     let raf = 0;
     let visible = true;
+    let primed = false; // first frame is applied even off-screen, so scrolling in doesn't pay for it
     let last = '';
     const applied: Record<string, string> = {};
     const changed = (key: string, value: unknown) => {
@@ -115,7 +116,8 @@ export function StoryMap({ frame, initial, className, label }: {
 
       const tick = (now: number) => {
         raf = requestAnimationFrame(tick);
-        if (!visible) return;
+        if (!visible && primed) return;
+        primed = true;
         const f = frame.current;
         const key = JSON.stringify(f);
         // The callout ring pulses on its own clock, so keep drawing while it shows.
@@ -135,7 +137,9 @@ export function StoryMap({ frame, initial, className, label }: {
           }
         });
 
-        const stormKey = [Math.round(f.hour * 20) / 20, Math.round(f.storm * 50) / 50];
+        // Quarter-hour steps: the storm moves ~0.06° per step (invisible) and its ~1000-point
+        // GeoJSON is re-sent to the map worker 4x per forecast hour instead of every frame.
+        const stormKey = [Math.round(f.hour * 4) / 4, Math.round(f.storm * 20) / 20];
         if (changed('storm', stormKey)) {
           (map.getSource('storm') as GeoJSONSource).setData(stormFeatures(f.hour));
           map.setPaintProperty('storm', 'heatmap-opacity', f.storm);
@@ -163,7 +167,7 @@ export function StoryMap({ frame, initial, className, label }: {
           (map.getSource('cps') as GeoJSONSource).setData({ type: 'FeatureCollection', features });
         }
 
-        if (changed('truck', f.truck && [f.truck.route, Math.round(f.truck.t * 2000)])) {
+        if (changed('truck', f.truck && [f.truck.route, Math.round(f.truck.t * 600)])) { // ~1.4 mi steps
           const truck = f.truck ? along(storyRoutes.find(r => r.id === f.truck!.route)!, f.truck.t) : null;
           (map.getSource('truck') as GeoJSONSource).setData({ type: 'FeatureCollection', features: truck ? [{ type: 'Feature', properties: { b: truck.bearing }, geometry: { type: 'Point', coordinates: truck.at } }] : [] });
         }

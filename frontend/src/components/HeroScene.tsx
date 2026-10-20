@@ -48,17 +48,19 @@ export function HeroScene() {
   useEffect(() => {
     let raf = 0;
     const start = performance.now();
+    const write = (el: HTMLElement | null, text: string) => {
+      if (el && el.textContent !== text) el.textContent = text;
+    };
     const loop = (now: number) => {
-      const t = (now - start) / 1000;
-      const f = heroFrame(t, reduced);
+      const f = heroFrame((now - start) / 1000, reduced);
       frame.current = f;
       // The window's chrome follows the same clock as the map: countdown, forecast hour, scrubber.
-      if (eta.current) {
-        const left = pick.durationMin * 60 * (1 - (f.truck?.t ?? 0));
-        eta.current.textContent = `${String(Math.floor(left / 3600)).padStart(2, '0')}:${String(Math.floor(left / 60) % 60).padStart(2, '0')}:${String(Math.floor(left) % 60).padStart(2, '0')}`;
-      }
-      if (clock.current) clock.current.textContent = `${clockLabel(f.hour)} · +${String(Math.round(f.hour)).padStart(2, '0')}H`;
-      if (thumb.current) thumb.current.style.left = `${(f.hour / 16) * 100}%`;
+      // Text is only written when it changes, so most frames touch nothing in the DOM.
+      const left = pick.durationMin * 60 * (1 - (f.truck?.t ?? 0));
+      write(eta.current, `${String(Math.floor(left / 3600)).padStart(2, '0')}:${String(Math.floor(left / 60) % 60).padStart(2, '0')}:${String(Math.floor(left) % 60).padStart(2, '0')}`);
+      write(clock.current, `${clockLabel(f.hour)} · +${String(Math.round(f.hour)).padStart(2, '0')}H`);
+      // transform, not left: moving the thumb never triggers layout.
+      if (thumb.current) thumb.current.style.transform = `translateX(${(f.hour / 16) * 100}%)`;
       if (!reduced) raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -136,7 +138,7 @@ export function HeroScene() {
 
             <div className="app-timeline" aria-hidden="true">
               <span className="app-label">FORECAST</span>
-              <span className="app-track"><span ref={thumb} className="app-thumb" /></span>
+              <span className="app-track"><span ref={thumb} className="app-thumb-rail"><span className="app-thumb" /></span></span>
               <span ref={clock} className="mono app-clock">TUE 06:00 · +00H</span>
             </div>
           </div>
